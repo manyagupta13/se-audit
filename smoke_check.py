@@ -9,10 +9,11 @@ import os
 import sys
 
 import config
+from io_utils import read_jsonl
 
 
 def jl(p):
-    return [json.loads(l) for l in open(p)] if os.path.exists(p) else []
+    return read_jsonl(p)
 
 
 root = os.path.join(config.OUT_DIR, "gen")

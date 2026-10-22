@@ -13,18 +13,29 @@ Regenerates every number in the paper from one cached set of generations. Genera
 
 Model keys: `qwen1.5b`, `qwen3b`, `phi2`, `smollm2` (SmolLM2 is the capability-floor appendix case).
 
-Every step is resumable. If Colab disconnects, rerun the same command and it continues from the last saved item. Set `SE_OUT` to a Google Drive path so outputs survive the session (the notebook does this).
+Every step is resumable; see *Interruptions and checkpoints* below. `run_pipeline.py` runs all four steps in order.
 
 **Estimated time on a free T4:** about 10–20 min per model/split for generation, so about 3–4 h for all four models. Scoring takes about 10 min and analysis a few seconds. If you hit CUDA out-of-memory, lower `GEN_BATCH` for that model in `config.py`. Note that the batch size is part of the seeding, so keep it fixed once a run has started.
 
 ## Running it
 
-Use `run_se_audit.ipynb` in Colab (Runtime → T4 GPU), or on any GPU machine run:
+**Colab (recommended when Kaggle quota is used up):** open `run_se_audit_colab.ipynb` in Colab (File → Open notebook → GitHub tab, or upload it). Set Runtime → Change runtime type → T4 GPU, then Run all. All outputs and checkpoints go to `MyDrive/se_audit_run`. If the session dies, reconnect and Run all again; the run continues from the last saved batch.
+
+**Any GPU machine:**
 
 ```bash
 pip install -r requirements.txt
-bash run_all.sh
+python run_pipeline.py --work ./work --full      # resumable; rerun after any interruption
+python run_pipeline.py --work ./work --status    # progress per model and split
 ```
+
+### Interruptions and checkpoints
+
+- Each batch of generations (a few items) is appended to its JSONL file and forced to disk (`fsync`) as soon as it is produced, so a crash loses at most the batch in flight.
+- On restart, any line cut off by the crash is dropped, duplicate items are ignored, and generation continues with the missing items. Splits that are already complete are skipped without loading the model.
+- Scoring and table files are written atomically (temporary file, then rename), so a crash never leaves a half-written file.
+- A lock file with a 30 s heartbeat refuses a second session writing to the same folder while the first is alive. A dead session's lock goes stale after 150 s, or you can pass `--force`.
+- The work folder is portable. Copy it to another machine or platform and rerun `--full` there to continue.
 
 ## Using the output in the paper
 
@@ -53,7 +64,7 @@ These are fixed by this code. Some differ from or add to the submitted text.
 
 ## Files
 
-`config.py` (all settings) · `data.py` · `wol.py` (Web of Lies parser/solver/generator/verifier) · `prompts.py` (prompts, answer extraction, step splitting) · `generate.py` · `score.py` · `analyze.py` · `run_all.sh` · `run_se_audit.ipynb`
+`config.py` (all settings) · `data.py` · `wol.py` (Web of Lies parser/solver/generator/verifier) · `prompts.py` (prompts, answer extraction, step splitting) · `generate.py` · `score.py` · `analyze.py` · `io_utils.py` (crash-safe file I/O) · `run_pipeline.py` (orchestration, resume, lock, status) · `run_se_audit_colab.ipynb` · `run_se_audit_kaggle.ipynb` (+ `kaggle_run.py` wrapper) · `run_all.sh`
 
 ## Troubleshooting
 
@@ -63,7 +74,7 @@ These are fixed by this code. Some differ from or add to the submitted text.
 
 ## Running on Kaggle
 
-Import `run_se_audit_kaggle.ipynb` into Kaggle once (File → Import Notebook) and set `REPO` in its first cell. Every run clones or pulls this repository, so code fixes need no re-upload. All logic lives in `kaggle_run.py`.
+Import `run_se_audit_kaggle.ipynb` into Kaggle once (File → Import Notebook) and set `REPO` in its first cell. Every run clones or pulls this repository, so code fixes need no re-upload. All logic lives in `run_pipeline.py` (`kaggle_run.py` is a thin wrapper).
 
 1. In the notebook settings, set **Accelerator = GPU T4 x2** and **Internet = On**. T4 x2 is recommended over P100, because recent PyTorch builds may not support the P100. With a single GPU, the models run one after another.
 2. Run all cells with `FULL = False`. This is a smoke test: 10 items per split on Qwen-1.5B and 6 on Phi-2, written to a separate folder.

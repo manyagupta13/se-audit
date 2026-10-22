@@ -17,6 +17,7 @@ import urllib.request
 
 import config
 import wol
+from io_utils import read_jsonl, write_jsonl_atomic
 
 BBH_WOL_URL = "https://raw.githubusercontent.com/suzgunmirac/BIG-Bench-Hard/main/bbh/web_of_lies.json"
 MULTIARITH_URL = "https://raw.githubusercontent.com/kojima-takeshi188/zero_shot_cot/main/dataset/MultiArith/MultiArith.json"
@@ -26,16 +27,16 @@ def _fetch(url, name):
     os.makedirs(config.DATA_DIR, exist_ok=True)
     path = os.path.join(config.DATA_DIR, name)
     if not os.path.exists(path):
-        urllib.request.urlretrieve(url, path)
+        tmp = path + ".part"
+        urllib.request.urlretrieve(url, tmp)
+        os.replace(tmp, path)   # never leave a half-downloaded file behind
     with open(path) as f:
         return json.load(f)
 
 
 def _write(split, items):
     path = os.path.join(config.DATA_DIR, f"{split}.jsonl")
-    with open(path, "w") as f:
-        for it in items:
-            f.write(json.dumps(it) + "\n")
+    write_jsonl_atomic(path, items)
     print(f"{split}: {len(items)} items -> {path}")
 
 
@@ -78,8 +79,7 @@ def load(split):
     path = os.path.join(config.DATA_DIR, f"{split}.jsonl")
     if not os.path.exists(path):
         build()
-    with open(path) as f:
-        return [json.loads(l) for l in f]
+    return read_jsonl(path)
 
 
 if __name__ == "__main__":

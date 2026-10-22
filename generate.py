@@ -27,13 +27,25 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import config
 import data
 import prompts as P
+from io_utils import append_jsonl, read_jsonl, repair_jsonl
 
 
 def _done_ids(path):
-    if not os.path.exists(path):
-        return set()
-    with open(path) as f:
-        return {json.loads(l)["id"] for l in f if l.strip()}
+    return {r["id"] for r in read_jsonl(path)}
+
+
+def _paths(model_key, split):
+    d = os.path.join(config.OUT_DIR, "gen", model_key)
+    return os.path.join(d, f"{split}.jsonl"), os.path.join(d, f"{split}.judge.jsonl")
+
+
+def split_complete(model_key, split, stage="all", limit=None):
+    """True if this split needs no more work, so the model need not even be loaded."""
+    want = {it["id"] for it in data.load(split)[:limit]}
+    gen_p, judge_p = _paths(model_key, split)
+    gen_ok = want <= _done_ids(gen_p)
+    judge_ok = want <= _done_ids(judge_p)
+    return {"gen": gen_ok, "judge": judge_ok, "all": gen_ok and judge_ok}[stage]
 
 
 def load_model(model_key, dtype):
@@ -80,6 +92,7 @@ def gen_split(tok, model, model_key, split, limit=None):
     out_dir = os.path.join(config.OUT_DIR, "gen", model_key)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{split}.jsonl")
+    repair_jsonl(path)          # drop a line cut off by a crash before appending after it
     done = _done_ids(path)
     todo = [it for it in items if it["id"] not in done]
     if not todo:
@@ -95,22 +108,23 @@ def gen_split(tok, model, model_key, split, limit=None):
         style_out = run_generate(tok, model, model_key, style_texts, 1)
         sc_texts = [P.format_prompt(tok, model_key, P.NEUTRAL_SYSTEM, P.task_user(it)) for it in batch]
         sc_out = run_generate(tok, model, model_key, sc_texts, config.K_SC)
-        with open(path, "a") as f:
-            for i, it in enumerate(batch):
-                rec = {k: it[k] for k in ("id", "question", "answer", "type")}
-                rec["style"] = []
-                for j, (persona, _) in enumerate(P.STYLES):
-                    txt = style_out[i * config.K_STYLE + j]
-                    pred = P.extract(txt, it["type"])
-                    rec["style"].append({"persona": persona, "text": txt, "pred": pred,
-                                         "correct": P.is_correct(pred, it["answer"], it["type"])})
-                rec["sc"] = []
-                for j in range(config.K_SC):
-                    txt = sc_out[i * config.K_SC + j]
-                    pred = P.extract(txt, it["type"])
-                    rec["sc"].append({"text": txt, "pred": pred,
-                                      "correct": P.is_correct(pred, it["answer"], it["type"])})
-                f.write(json.dumps(rec) + "\n")
+        out = []
+        for i, it in enumerate(batch):
+            rec = {k: it[k] for k in ("id", "question", "answer", "type")}
+            rec["style"] = []
+            for j, (persona, _) in enumerate(P.STYLES):
+                txt = style_out[i * config.K_STYLE + j]
+                pred = P.extract(txt, it["type"])
+                rec["style"].append({"persona": persona, "text": txt, "pred": pred,
+                                     "correct": P.is_correct(pred, it["answer"], it["type"])})
+            rec["sc"] = []
+            for j in range(config.K_SC):
+                txt = sc_out[i * config.K_SC + j]
+                pred = P.extract(txt, it["type"])
+                rec["sc"].append({"text": txt, "pred": pred,
+                                  "correct": P.is_correct(pred, it["answer"], it["type"])})
+            out.append(rec)
+        append_jsonl(path, out)     # one checkpoint per batch, forced to disk
         n = b + len(batch)
         print(f"[gen] {model_key}/{split}: {n}/{len(todo)}  ({time.time()-t0:.0f}s)", flush=True)
 
@@ -121,10 +135,9 @@ def _tail_tokens(tok, text, n):
 
 
 def judge_split(tok, model, model_key, split):
-    gen_path = os.path.join(config.OUT_DIR, "gen", model_key, f"{split}.jsonl")
-    path = os.path.join(config.OUT_DIR, "gen", model_key, f"{split}.judge.jsonl")
-    with open(gen_path) as f:
-        recs = [json.loads(l) for l in f]
+    gen_path, path = _paths(model_key, split)
+    recs = read_jsonl(gen_path)
+    repair_jsonl(path)
     done = _done_ids(path)
     todo = [r for r in recs if r["id"] not in done]
     if not todo:
@@ -144,11 +157,12 @@ def judge_split(tok, model, model_key, split):
             user = P.JUDGE_TEMPLATE.format(question=r["question"], t1=t[0], t2=t[1], t3=t[2])
             texts.append(P.format_prompt(tok, model_key, P.NEUTRAL_SYSTEM, user))
         outs = run_generate(tok, model, model_key, texts, 1, sample=False, max_new=8)
-        with open(path, "a") as f:
-            for r, o, perm in zip(batch, outs, perms):
-                pos = P.parse_judge(o)   # displayed position the judge chose (0-based) or None
-                f.write(json.dumps({"id": r["id"], "raw": o, "perm": perm, "pos": pos,
-                                    "pick": perm[pos] if pos is not None else None}) + "\n")
+        out = []
+        for r, o, perm in zip(batch, outs, perms):
+            pos = P.parse_judge(o)   # displayed position the judge chose (0-based) or None
+            out.append({"id": r["id"], "raw": o, "perm": perm, "pos": pos,
+                                "pick": perm[pos] if pos is not None else None})
+        append_jsonl(path, out)
     print(f"[judge] {model_key}/{split}: done")
 
 
@@ -162,6 +176,10 @@ def main():
     ap.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="float16")
     a = ap.parse_args()
     data.build() if not os.path.exists(os.path.join(config.DATA_DIR, "ma2.jsonl")) else None
+    todo = [s for s in a.splits if not split_complete(a.model, s, a.stage, a.limit)]
+    if not todo:
+        print(f"[skip] {a.model}: all requested splits already complete", flush=True)
+        return
     tok, model = load_model(a.model, getattr(torch, a.dtype))
     for s in a.splits:
         if a.stage in ("gen", "all"):

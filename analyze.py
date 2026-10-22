@@ -37,6 +37,7 @@ from scipy.stats import binomtest, combine_pvalues
 
 import config
 import wol
+from io_utils import read_jsonl, write_text_atomic
 
 T = os.path.join(config.OUT_DIR, "tables")
 MAPPINGS = ["V0", "V1", "V2", "V3", "V4", "V5"]
@@ -44,10 +45,7 @@ MAPPINGS = ["V0", "V1", "V2", "V3", "V4", "V5"]
 
 # ---------------------------------------------------------------- loading ----
 def _jl(path):
-    if not os.path.exists(path):
-        return None
-    with open(path) as f:
-        return [json.loads(l) for l in f if l.strip()]
+    return read_jsonl(path) if os.path.exists(path) else None
 
 
 def load(model, split):
@@ -274,8 +272,7 @@ def lab(S):
 
 def write(name, body):
     os.makedirs(T, exist_ok=True)
-    with open(os.path.join(T, name), "w") as f:
-        f.write(body)
+    write_text_atomic(os.path.join(T, name), body)
 
 
 def table(spec, header, rows, caption, label, size="\\small", float_="[H]"):
@@ -505,14 +502,12 @@ def main():
         claims.append((f"Sign test {k}", f"{v['wins']} wins / {v['losses']} losses / {v['ties']} ties, p={v['p']:.3f}"))
 
     os.makedirs(T, exist_ok=True)
-    with open(os.path.join(T, "claims.md"), "w") as f:
-        f.write("| Claim | Recomputed |\n|---|---|\n")
-        for k, v in claims:
-            f.write(f"| {k} | {v} |\n")
+    write_text_atomic(os.path.join(T, "claims.md"),
+                      "| Claim | Recomputed |\n|---|---|\n" + "".join(f"| {k} | {v} |\n" for k, v in claims))
     drop = {"toth_picks"}
-    with open(os.path.join(T, "results.json"), "w") as f:
-        json.dump({"configs": [{k: v for k, v in S.items() if k not in drop} for S in main_s + floor_s],
-                   "means": means, "sign_tests": tests, "fisher_mcnemar": fisher}, f, indent=1)
+    write_text_atomic(os.path.join(T, "results.json"), json.dumps(
+        {"configs": [{k: v for k, v in S.items() if k not in drop} for S in main_s + floor_s],
+         "means": means, "sign_tests": tests, "fisher_mcnemar": fisher}, indent=1))
     print(open(os.path.join(T, "claims.md")).read())
     print("Tables written to", T)
 

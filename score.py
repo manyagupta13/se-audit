@@ -20,6 +20,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 import config
 import prompts as P
+from io_utils import read_jsonl, write_jsonl_atomic
 
 
 def _gen_files():
@@ -32,8 +33,12 @@ def _gen_files():
 
 
 def _load(path):
-    with open(path) as f:
-        return [json.loads(l) for l in f if l.strip()]
+    return read_jsonl(path)
+
+
+def _up_to_date(out_path, recs):
+    """Output covers exactly the items in the generation file (by id)."""
+    return os.path.exists(out_path) and {r["id"] for r in _load(out_path)} == {r["id"] for r in recs}
 
 
 @torch.inference_mode()
@@ -65,7 +70,7 @@ def run_nli(backbone):
         os.makedirs(out_dir, exist_ok=True)
         op = os.path.join(out_dir, f"{s}.jsonl")
         recs = _load(gp)
-        if os.path.exists(op) and len(_load(op)) == len(recs):
+        if _up_to_date(op, recs):
             print(f"[nli:{backbone}] {m}/{s}: up to date")
             continue
         pairs, index = [], []
@@ -76,13 +81,14 @@ def run_nli(backbone):
                 pairs.extend(zip(st[:-1], st[1:]))
         probs = nli_probs(tok, model, pairs, order) if pairs else []
         k = j = 0
-        with open(op, "w") as f:
-            for r in recs:
-                traces = []
-                for _ in r["style"]:
-                    ne = index[j]; j += 1
-                    traces.append(probs[k:k + ne]); k += ne
-                f.write(json.dumps({"id": r["id"], "edges": traces}) + "\n")
+        out = []
+        for r in recs:
+            traces = []
+            for _ in r["style"]:
+                ne = index[j]; j += 1
+                traces.append(probs[k:k + ne]); k += ne
+            out.append({"id": r["id"], "edges": traces})
+        write_jsonl_atomic(op, out)   # whole file or nothing, never half a file
         print(f"[nli:{backbone}] {m}/{s}: {len(pairs)} edges")
     del model
     torch.cuda.empty_cache()
@@ -95,15 +101,17 @@ def run_sim():
         out_dir = os.path.join(config.OUT_DIR, "sim", m)
         os.makedirs(out_dir, exist_ok=True)
         recs = _load(gp)
+        sp = os.path.join(out_dir, f"{s}.jsonl")
+        if _up_to_date(sp, recs):
+            print(f"[sim] {m}/{s}: up to date")
+            continue
         texts = [t["text"] for r in recs for t in r["style"]]
         v = emb.encode(texts, normalize_embeddings=True, convert_to_tensor=True, batch_size=64)
         v = v.view(len(recs), config.K_STYLE, -1)
         sims = torch.einsum("ikd,ild->ikl", v, v)
         iu = torch.triu_indices(config.K_STYLE, config.K_STYLE, 1)
         cos = sims[:, iu[0], iu[1]].mean(-1).cpu().tolist()
-        with open(os.path.join(out_dir, f"{s}.jsonl"), "w") as f:
-            for r, c in zip(recs, cos):
-                f.write(json.dumps({"id": r["id"], "cosine": c}) + "\n")
+        write_jsonl_atomic(sp, [{"id": r["id"], "cosine": c} for r, c in zip(recs, cos)])
         print(f"[sim] {m}/{s}: mean cosine {sum(cos)/len(cos):.3f}")
 
 
