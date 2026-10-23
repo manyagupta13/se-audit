@@ -484,7 +484,7 @@ def main():
         ("Mean ToTh accuracy-to-oracle gap, pp (paper: 38)", f"{100*mean([S['oracle']-S['acc']['toth'] for S in main_s if S['acc']['toth'] is not None]):.1f}" if toth_se else "n/a"),
         ("SC SE > 1 configs", ", ".join(f"{lab(S)[0]}/{lab(S)[1]}" for S in main_s if (S['se']['sc'] or 0) > 1) or "none"),
         ("Qwen min cosine (paper: >0.85)", f"{min(S['cosine'] for S in qwen if S['cosine'] is not None):.3f}" if any(S['cosine'] is not None for S in qwen) else "n/a"),
-        ("Phi-2 MultiArith cosine (paper: 0.60)", ", ".join(f"{S['cosine']:.3f}" for S in main_s if S['model']=='phi2' and S['split'].startswith('ma') and S['cosine'] is not None) or "n/a"),
+        ("Phi-2 math-split cosine (paper, MultiArith: 0.60)", ", ".join(f"{S['cosine']:.3f}" for S in main_s if S['model']=='phi2' and S['split'].startswith('gsm') and S['cosine'] is not None) or "n/a"),
         ("Verifier solver accuracy on WoL (paper: 100%)", rng([S.get('verifier_solver_acc') for S in wol_s])),
         ("Max ToTh accuracy on WoL (paper: 48%)", f"{100*max(S['acc']['toth'] for S in wol_s if S['acc']['toth'] is not None):.1f}" if any(S['acc']['toth'] is not None for S in wol_s) else "n/a"),
         ("Entailment rate range, RoBERTa (paper: 9-41%)", rng([S['entail_rate'].get('roberta') for S in main_s])),

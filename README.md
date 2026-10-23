@@ -6,7 +6,7 @@ Regenerates every number in the paper from one cached set of generations. Genera
 
 | Step | Command | Needs GPU | What it writes |
 |---|---|---|---|
-| 1. Data | `python data.py` | no | `outputs/data/{wol4,wol5,ma1,ma2}.jsonl` |
+| 1. Data | `python data.py` | no | `outputs/data/{wol4,wol5,gsm3,gsm5}.jsonl` |
 | 2. Generate | `python generate.py --model <key>` | yes | `outputs/gen/<model>/<split>.jsonl` (3 style traces + 5 self-consistency samples per item) and `<split>.judge.jsonl` |
 | 3. Score | `python score.py` | yes (small) | NLI edge probabilities (RoBERTa + BART) and trace cosine |
 | 4. Analyze | `python analyze.py` | no | `outputs/tables/*.tex`, `results.json`, `claims.md` |
@@ -28,6 +28,10 @@ pip install -r requirements.txt
 python run_pipeline.py --work ./work --full      # resumable; rerun after any interruption
 python run_pipeline.py --work ./work --status    # progress per model and split
 ```
+
+### Reusing the Web-of-Lies results from the earlier run
+
+The WoL splits are byte-identical to the ones used before, so their generations stay valid. Copy the earlier run's `raw_outputs.zip` into the work folder as `earlier_raw_outputs.zip` (the Colab notebook unpacks it once, ignoring the old `ma1`/`ma2` files) and run `--full`: only `gsm3` and `gsm5` are generated, then everything is rescored and the tables are rebuilt. Expect about 1.5–2.5 h on one T4.
 
 ### Interruptions and checkpoints
 
@@ -53,8 +57,8 @@ These are fixed by this code. Some differ from or add to the submitted text.
 4. **Data.**
    - **WoL-4** is 50 BBH `web_of_lies` items.
    - **WoL-5** is 50 items generated in the identical BBH template at chain length 5, balanced Yes/No. BBH ships only length 4.
-   - **MA-1/MA-2** are MultiArith problems with additive-only (+, −) and multiplicative (×, ÷) equations. Every MultiArith problem has exactly two operations.
-   - All splits use seed 0.
+   - **GSM-3/GSM-5** are 50 GSM8K test problems each. GSM-3 has exactly 3 calculation steps in the reference solution; GSM-5 has 5 or more (a step is one `<<...>>` annotation). Selection uses only the reference solutions, never any model output. They replace the earlier MA-1/MA-2 (MultiArith) splits, which were at the accuracy ceiling for the Qwen models: every MultiArith problem has exactly two operations and all 200 additive ones share one equation shape, so no fair difficulty rule creates headroom there. The paper must say the splits were replaced and why. GSM8K may be in the models' pre-training data.
+   - All splits use seed 0. `data.py` refuses to change a split file that already exists, because saved generations are keyed to it.
 5. **Prompts.** The three persona prompts, the neutral self-consistency prompt and the judge prompt are in `prompts.py`. Quote them in the appendix.
 6. **ToTh.** Traces are split into steps (one per line or sentence). Each adjacent pair is scored by RoBERTa-large-MNLI, and the trace with the highest trust score is picked. The six mappings V0–V5 and the inverted mapping are defined in `analyze.py::trust` and in the `tab:mappings` caption. V0 is the headline mapping.
 7. **BART ablation** now covers all configurations, not five.

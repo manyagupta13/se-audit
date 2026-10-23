@@ -10,7 +10,7 @@ regenerates, so every table is computed from the same pool.
 
 Usage:
   python generate.py --model qwen1.5b              # all splits, gen + judge
-  python generate.py --model phi2 --splits wol4 ma1
+  python generate.py --model phi2 --splits wol4 gsm3
   python generate.py --model qwen3b --stage judge
 """
 import argparse
@@ -175,7 +175,8 @@ def main():
                     help="only the first N items per split (smoke tests; use a separate SE_OUT)")
     ap.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="float16")
     a = ap.parse_args()
-    data.build() if not os.path.exists(os.path.join(config.DATA_DIR, "ma2.jsonl")) else None
+    if not all(os.path.exists(os.path.join(config.DATA_DIR, f"{s}.jsonl")) for s in config.SPLITS):
+        data.build()
     todo = [s for s in a.splits if not split_complete(a.model, s, a.stage, a.limit)]
     if not todo:
         print(f"[skip] {a.model}: all requested splits already complete", flush=True)

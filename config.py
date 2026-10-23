@@ -31,8 +31,8 @@ GEN_BATCH = {"qwen1.5b": 32, "qwen3b": 24, "phi2": 12, "smollm2": 24}
 JUDGE_TRACE_TOKENS = {"qwen1.5b": 1024, "qwen3b": 1024, "phi2": 400, "smollm2": 600}
 
 # ---- datasets ---------------------------------------------------------------
-SPLITS = ["wol4", "wol5", "ma1", "ma2"]
-SPLIT_LABEL = {"wol4": "WoL-4", "wol5": "WoL-5", "ma1": "MA-1", "ma2": "MA-2"}
+SPLITS = ["wol4", "wol5", "gsm3", "gsm5"]
+SPLIT_LABEL = {"wol4": "WoL-4", "wol5": "WoL-5", "gsm3": "GSM-3", "gsm5": "GSM-5"}
 WOL_SPLITS = ["wol4", "wol5"]
 
 # ---- sampling ---------------------------------------------------------------

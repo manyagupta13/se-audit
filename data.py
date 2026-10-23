@@ -3,16 +3,26 @@
   wol4 : 50 items sampled from BIG-Bench-Hard web_of_lies (chain length 4)
   wol5 : 50 items generated in the identical BBH template at chain length 5
          (BBH ships only length 4), answers balanced Yes/No
-  ma1  : 50 MultiArith problems whose equation uses only + and -
-  ma2  : 50 MultiArith problems whose equation uses * or /
-         (every MultiArith problem has exactly two operations, so operator
-          type is the complexity axis)
+  gsm3 : 50 GSM8K test problems whose reference solution has exactly 3 calculation steps
+  gsm5 : 50 GSM8K test problems whose reference solution has 5 or more calculation steps
+         (a step is one <<...>> calculator annotation in the reference solution)
+
+Selection uses only the reference solutions, never any model output, and is
+fixed before any model is run on these splits.
+
+The original MA-1 / MA-2 (MultiArith) splits were dropped because they sit at
+the accuracy ceiling for the Qwen models, which leaves selection efficiency
+undefined or noise-dominated. Every MultiArith problem has exactly two
+operations and the additive ones share one equation shape, so no fair
+difficulty rule can create headroom there. The old MA outputs are in the earlier
+raw_outputs.zip; they are no longer produced or analysed.
 
 Run:  python data.py
 """
 import json
 import os
 import random
+import re
 import urllib.request
 
 import config
@@ -20,7 +30,7 @@ import wol
 from io_utils import read_jsonl, write_jsonl_atomic
 
 BBH_WOL_URL = "https://raw.githubusercontent.com/suzgunmirac/BIG-Bench-Hard/main/bbh/web_of_lies.json"
-MULTIARITH_URL = "https://raw.githubusercontent.com/kojima-takeshi188/zero_shot_cot/main/dataset/MultiArith/MultiArith.json"
+GSM8K_TEST_URL = "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl"
 
 
 def _fetch(url, name):
@@ -31,11 +41,24 @@ def _fetch(url, name):
         urllib.request.urlretrieve(url, tmp)
         os.replace(tmp, path)   # never leave a half-downloaded file behind
     with open(path) as f:
+        if name.endswith(".jsonl"):
+            return [json.loads(l) for l in f if l.strip()]
         return json.load(f)
 
 
 def _write(split, items):
+    """Write a split, but never silently change one that already has data.
+
+    Generations are matched to items by id, so rewriting an existing split with
+    different content would let stale outputs be mistaken for current ones.
+    """
     path = os.path.join(config.DATA_DIR, f"{split}.jsonl")
+    if os.path.exists(path):
+        if read_jsonl(path) == items:
+            return
+        raise SystemExit(f"{path} already exists with different content. Refusing to overwrite it, "
+                         "because saved generations are keyed to it. Delete it (and "
+                         f"gen/*/{split}*.jsonl, nli/*/*/{split}.jsonl, sim/*/{split}.jsonl) on purpose if you want a new split.")
     write_jsonl_atomic(path, items)
     print(f"{split}: {len(items)} items -> {path}")
 
@@ -64,15 +87,26 @@ def build():
                       "answer": a, "type": "bool", "source": "generated:len5"})
     _write("wol5", items)
 
-    # --- MultiArith --------------------------------------------------------
-    ma = _fetch(MULTIARITH_URL, "multiarith.json")
-    add = [e for e in ma if not any(o in e["lEquations"][0] for o in "*/")]
-    mul = [e for e in ma if any(o in e["lEquations"][0] for o in "*/")]
-    for split, pool in (("ma1", add), ("ma2", mul)):
-        pick = rng.sample(pool, n)
-        _write(split, [{"id": f"{split}-{e['iIndex']}", "question": e["sQuestion"].strip(),
-                        "answer": float(e["lSolutions"][0]), "type": "num",
-                        "source": f"multiarith:{e['iIndex']}", "equation": e["lEquations"][0]} for e in pick])
+    # --- GSM8K by number of calculation steps -------------------------------
+    gsm = _fetch(GSM8K_TEST_URL, "gsm8k_test.jsonl")
+    pools = {"gsm3": [], "gsm5": []}
+    for idx, e in enumerate(gsm):
+        steps = len(re.findall(r"<<.*?>>", e["answer"]))
+        gold = e["answer"].split("####")[-1].strip().replace(",", "")
+        try:
+            gold = float(gold)
+        except ValueError:
+            continue
+        item = {"question": e["question"].strip(), "answer": gold, "type": "num",
+                "source": f"gsm8k-test:{idx}", "ref_steps": steps}
+        if steps == 3:
+            pools["gsm3"].append((idx, item))
+        elif steps >= 5:
+            pools["gsm5"].append((idx, item))
+    grng = random.Random(f"gsm-{config.SEED}")   # own stream: leaves the WoL items untouched
+    for split, pool in pools.items():
+        pick = grng.sample(pool, n)
+        _write(split, [dict(it, id=f"{split}-{idx}") for idx, it in pick])
 
 
 def load(split):

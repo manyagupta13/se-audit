@@ -34,8 +34,9 @@ from io_utils import read_jsonl, write_text_atomic   # noqa: E402
 
 GPU_PLAN = [["qwen1.5b", "phi2"], ["qwen3b", "smollm2"]]   # one list per GPU
 ALL_MODELS = [m for chain in GPU_PLAN for m in chain]
-SPLITS = ["wol4", "wol5", "ma1", "ma2"]
+SPLITS = ["wol4", "wol5", "gsm3", "gsm5"]
 N = 50
+LEGACY_SPLITS = {"ma1", "ma2"}
 LOCK_STALE_S = 150
 
 
@@ -134,7 +135,7 @@ def status(P):
         print(f"  {m:9s} " + " | ".join(cells))
     print(f"Generation: {100 * done / total:.0f}% done")
     for d in ("nli/roberta", "nli/bart", "sim"):
-        n = len(glob.glob(os.path.join(P.out, d, "*", "*.jsonl")))
+        n = sum(os.path.exists(os.path.join(P.out, d, m, f"{s}.jsonl")) for m in ALL_MODELS for s in SPLITS)
         print(f"  scored {d:12s}: {n}/{len(ALL_MODELS) * len(SPLITS)} files")
     t = os.path.join(P.out, "tables", "claims.md")
     print("Tables:", "built" if os.path.exists(t) else "not built yet")
@@ -161,7 +162,7 @@ def restore_previous(P):
 
 def smoke(P):
     sh("python data.py", P.smoke)
-    sh("python generate.py --model qwen1.5b --splits wol4 ma1 --limit 10", P.smoke)
+    sh("python generate.py --model qwen1.5b --splits wol4 gsm3 --limit 10", P.smoke)
     sh("python generate.py --model phi2 --splits wol4 --limit 6", P.smoke)
     sh("python smoke_check.py", P.smoke)
 
@@ -205,6 +206,11 @@ def full(P):
         sys.exit(1)
 
     sh("python score.py", P.out, check=False)
+    for stale in ("claims.md", "results.json"):   # never mistake an earlier run's tables for this one's
+        try:
+            os.remove(os.path.join(P.out, "tables", stale))
+        except FileNotFoundError:
+            pass
     sh("python analyze.py", P.out, check=False)
     ok = os.path.exists(os.path.join(P.out, "tables", "claims.md"))
     save_zips(P, tables=ok)
@@ -223,6 +229,8 @@ def save_zips(P, tables):
                 for root, _, files in os.walk(os.path.join(P.out, d)):
                     for f in files:
                         if ".tmp" in f or f.endswith(".part"):
+                            continue
+                        if f.split(".")[0] in LEGACY_SPLITS:   # outputs of dropped splits (old MultiArith run)
                             continue
                         p = os.path.join(root, f)
                         z.write(p, os.path.relpath(p, P.out))
